@@ -13,7 +13,7 @@ jobs:
 
       - name: Extract Android project
         run: |
-          unzip -o FamilyExpense-Android-phone-build.zip -d project
+          unzip -o FamilyExpense-Android-phone-build-v2.zip -d project
           cd project
           find . -maxdepth 3 -type f | head -50
 
