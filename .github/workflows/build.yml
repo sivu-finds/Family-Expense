@@ -20,6 +20,23 @@ jobs:
           cd project
           find . -maxdepth 3 -type f | head -50
 
+      - name: Remove sensitive SMS and notification-listener access for safer sideload build
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          manifests = list(Path("project").rglob("AndroidManifest.xml"))
+          if not manifests:
+              raise SystemExit("AndroidManifest.xml not found")
+          for path in manifests:
+              text = path.read_text()
+              text = re.sub(r'^.*android\\.permission\\.(READ_SMS|RECEIVE_SMS|READ_PHONE_STATE|RECEIVE_MMS|READ_MMS|SMS_RECEIVED).*\\n', '', text, flags=re.MULTILINE)
+              # Disable notification-listener services that can read transaction notifications.
+              text = re.sub(r'^[ \\t]*<service\\b(?:(?!</service>).)*NotificationListenerService(?:(?!</service>).)*</service>\\s*', '', text, flags=re.MULTILINE | re.DOTALL)
+              path.write_text(text)
+              print(f"Reduced sensitive permissions in {path}")
+          PY
+
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
