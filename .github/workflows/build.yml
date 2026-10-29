@@ -40,16 +40,16 @@ jobs:
           for path in manifests:
               tree = ET.parse(path)
               root = tree.getroot()
+              sensitive_permissions = {'READ_SMS', 'RECEIVE_SMS', 'READ_PHONE_STATE', 'RECEIVE_MMS', 'READ_MMS'}
               for node in list(root):
-                  if node.tag == 'uses-permission' and node.get(android + 'name', '').split('.')[-1] in {
-                      'READ_SMS', 'RECEIVE_SMS', 'READ_PHONE_STATE', 'RECEIVE_MMS', 'READ_MMS'
-                  }:
-                      root.remove(node)
-                  elif node.tag in {'receiver', 'service'}:
-                      # This project only uses these components for SMS/notification transaction capture.
+                  if node.tag == 'uses-permission' and node.get(android + 'name', '').split('.')[-1] in sensitive_permissions:
                       root.remove(node)
               app = root.find('application')
               if app is not None:
+                  # Components are children of application, not the manifest root.
+                  for node in list(app):
+                      if node.tag in {'receiver', 'service'}:
+                          app.remove(node)
                   app.attrib.pop(android + 'usesCleartextTraffic', None)
               tree.write(path, encoding='utf-8', xml_declaration=True)
               result = path.read_text()
@@ -113,6 +113,25 @@ jobs:
       - name: Build APK
         working-directory: project
         run: gradle --no-daemon assembleDebug
+
+      - name: Verify compiled APK has no sensitive permissions or capture components
+        run: |
+          APK="project/app/build/outputs/apk/debug/app-debug.apk"
+          AAPT="$ANDROID_HOME/build-tools/36.0.0/aapt"
+          test -f "$APK"
+          echo "=== Compiled APK permissions ==="
+          "$AAPT" dump permissions "$APK" | tee /tmp/apk-permissions.txt
+          if grep -E 'READ_SMS|RECEIVE_SMS|READ_PHONE_STATE|RECEIVE_MMS|READ_MMS' /tmp/apk-permissions.txt; then
+            echo "ERROR: sensitive permission remains in compiled APK"
+            exit 1
+          fi
+          echo "=== Compiled APK manifest ==="
+          "$AAPT" dump xmltree "$APK" AndroidManifest.xml | tee /tmp/apk-manifest.txt
+          if grep -E 'TransactionSmsReceiver|TransactionNotificationListener|NotificationListenerService|SMS_RECEIVED' /tmp/apk-manifest.txt; then
+            echo "ERROR: transaction capture component remains in compiled APK"
+            exit 1
+          fi
+          echo "Verified compiled APK manifest is free of targeted SMS/notification capture entries."
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
