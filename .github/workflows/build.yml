@@ -36,67 +36,17 @@ jobs:
           echo "=== References ==="
           grep -RInE 'TransactionSmsReceiver|TransactionNotificationListener|NotificationListenerService|READ_SMS|RECEIVE_SMS|SMS_RECEIVED' project/app/src/main || true
 
-      - name: Remove sensitive SMS and notification-listener access for safer sideload build
+      - name: Keep optional SMS transaction capture sources
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          import xml.etree.ElementTree as ET
-          android = '{http://schemas.android.com/apk/res/android}'
-          ET.register_namespace('android', 'http://schemas.android.com/apk/res/android')
-          manifests = list(Path("project").rglob("AndroidManifest.xml"))
-          if not manifests:
-              raise SystemExit("AndroidManifest.xml not found")
-          for path in manifests:
-              tree = ET.parse(path)
-              root = tree.getroot()
-              sensitive_permissions = {'READ_SMS', 'RECEIVE_SMS', 'READ_PHONE_STATE', 'RECEIVE_MMS', 'READ_MMS'}
-              for node in list(root):
-                  if node.tag == 'uses-permission' and node.get(android + 'name', '').split('.')[-1] in sensitive_permissions:
-                      root.remove(node)
-              app = root.find('application')
-              if app is not None:
-                  # Components are children of application, not the manifest root.
-                  for node in list(app):
-                      if node.tag in {'receiver', 'service'}:
-                          app.remove(node)
-                  app.attrib.pop(android + 'usesCleartextTraffic', None)
-              tree.write(path, encoding='utf-8', xml_declaration=True)
-              result = path.read_text()
-              for forbidden in ('READ_SMS', 'RECEIVE_SMS', 'READ_PHONE_STATE', 'RECEIVE_MMS', 'READ_MMS'):
-                  if forbidden in result:
-                      raise SystemExit(f"Sensitive entry {forbidden} remains in {path}")
-              print(f"Verified reduced-permission manifest: {path}")
-          PY
-
-      - name: Remove SMS and notification capture code from compiled app
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          import re
           root = Path("project/app/src/main")
-          # Remove the two source components that read transaction SMS or notifications.
-          for rel in (
-              "java/com/familyexpense/app/TransactionSmsReceiver.java",
-              "java/com/familyexpense/app/TransactionNotificationListener.java",
-              "res/xml/notification_listener_service.xml",
-          ):
-              path = root / rel
-              if path.exists():
-                  path.unlink()
-                  print(f"Removed sensitive capture source/resource: {path}")
-          # Remove the runtime request for SMS permissions from MainActivity.
-          activity = root / "java/com/familyexpense/app/MainActivity.java"
-          source = activity.read_text()
-          lines = source.splitlines(keepends=True)
-          filtered = [line for line in lines if "Manifest.permission.READ_SMS" not in line and "Manifest.permission.RECEIVE_SMS" not in line]
-          activity.write_text("".join(filtered))
-          # Fail closed if sensitive permission requests or capture class references remain.
-          scan = "\\n".join(p.read_text(errors="ignore") for p in root.rglob("*.java"))
-          forbidden = ("Manifest.permission.READ_SMS", "Manifest.permission.RECEIVE_SMS", "TransactionSmsReceiver", "TransactionNotificationListener", "NotificationListenerService", "SMS_RECEIVED")
-          remaining = [item for item in forbidden if item in scan]
-          if remaining:
-              raise SystemExit("Sensitive capture code remains in Java sources: " + ", ".join(remaining))
-          print("Verified: SMS and notification capture source code removed")
+          receiver = root / "java/com/familyexpense/app/TransactionSmsReceiver.java"
+          if not receiver.exists():
+              raise SystemExit("Expected transaction SMS receiver missing from source ZIP")
+          if "onReceive" not in receiver.read_text(errors="ignore"):
+              raise SystemExit("SMS receiver source did not pass basic validation")
+          print("Optional SMS receiver retained. User consent will be requested in the app.")
           PY
 
       - name: Implement Family Expense dashboard UI and app icon
@@ -107,6 +57,8 @@ jobs:
           java = root / "java/com/familyexpense/app/MainActivity.java"
           java.write_text(r'''package com.familyexpense.app;
 
+          import android.Manifest;
+          import android.content.pm.PackageManager;
           import android.app.Activity;
           import android.app.AlertDialog;
           import android.graphics.Color;
@@ -238,7 +190,7 @@ jobs:
           TextView family=button("Family sync",false); tools.addView(family,new LinearLayout.LayoutParams(0,-1,1));
           family.setOnClickListener(v->{new AlertDialog.Builder(this).setTitle("Family Wi-Fi sync").setMessage("Local Wi-Fi sync is the goal. This build only has a test-host scaffold; secure device pairing, authenticated encrypted transfer, and conflict handling are not implemented yet. Do not use it to share private expense data yet.").setNegativeButton("Cancel",null).setPositiveButton("Start host",(d,w)->{sync=new WifiSyncServer();sync.start(this);status.setText("Local Wi-Fi test host started. Secure pairing is still in development.");}).show();});
           TextView importBtn=button("Import options",false); LinearLayout.LayoutParams ilp=new LinearLayout.LayoutParams(0,-1,1); ilp.leftMargin=dp(10); tools.addView(importBtn,ilp);
-          importBtn.setOnClickListener(v->new AlertDialog.Builder(this).setTitle("Transaction import").setMessage("Automatic SMS reading is not enabled in this safety-focused build. You can add expenses manually. Any future import feature will be optional and clearly explained.").setPositiveButton("Got it",null).show());
+          importBtn.setOnClickListener(v->new AlertDialog.Builder(this).setTitle("Optional SMS transaction import").setMessage("If enabled, the app can read incoming SMS to look for bank transaction alerts. SMS may contain sensitive information. Enable only if you are comfortable. Verify detected transactions; manual entry remains available.").setNegativeButton("Not now",null).setPositiveButton("Enable SMS", (d,w)->requestSmsConsent()).show());
           search.addTextChangedListener(new TextWatcher(){public void beforeTextChanged(CharSequence s,int st,int c,int a){} public void onTextChanged(CharSequence s,int start,int before,int count){filterRecent(s.toString());} public void afterTextChanged(Editable e){}});
           }
           private void addCategory(LinearLayout parent,String symbol,String title,String caption,int tint) {
@@ -283,6 +235,27 @@ jobs:
                 refresh(); Toast.makeText(this,"Expense saved",Toast.LENGTH_SHORT).show();
             } catch(Exception ex) { Toast.makeText(this,"Enter a valid amount greater than ₹0",Toast.LENGTH_LONG).show(); }
           }).show();
+          }
+          private void requestSmsConsent() {
+          if (android.os.Build.VERSION.SDK_INT >= 23) {
+              boolean read = checkSelfPermission(Manifest.permission.READ_SMS) == PackageManager.PERMISSION_GRANTED;
+              boolean receive = checkSelfPermission(Manifest.permission.RECEIVE_SMS) == PackageManager.PERMISSION_GRANTED;
+              if (read && receive) {
+                  Toast.makeText(this,"SMS permission is already enabled",Toast.LENGTH_SHORT).show();
+              } else {
+                  requestPermissions(new String[]{Manifest.permission.READ_SMS, Manifest.permission.RECEIVE_SMS}, 741);
+              }
+          }
+          }
+          @Override public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+          super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+          if (requestCode == 741) {
+              boolean granted = grantResults.length >= 2;
+              for (int result : grantResults) if (result != PackageManager.PERMISSION_GRANTED) granted = false;
+              new AlertDialog.Builder(this).setTitle(granted ? "SMS import enabled" : "SMS import not enabled")
+                  .setMessage(granted ? "The app can receive supported transaction SMS alerts. Check the expenses list and verify amounts." : "SMS permission was not granted. Manual entry still works.")
+                  .setPositiveButton("OK",null).show();
+          }
           }
           private void showHistory() {
           new AlertDialog.Builder(this).setTitle("Expense history").setMessage(recent.getText().toString()+"\n\nTotal recorded: ₹"+String.format(Locale.US,"%,.2f",db.total())).setPositiveButton("Add expense", (d,w)->addManual()).setNegativeButton("Close",null).show();
@@ -349,17 +322,22 @@ jobs:
           test -f "$APK"
           echo "=== Compiled APK permissions ==="
           "$AAPT" dump permissions "$APK" | tee /tmp/apk-permissions.txt
-          if grep -E 'READ_SMS|RECEIVE_SMS|READ_PHONE_STATE|RECEIVE_MMS|READ_MMS' /tmp/apk-permissions.txt; then
-            echo "ERROR: sensitive permission remains in compiled APK"
+          # SMS permissions are intentionally present for optional user-consented import.
+          if grep -E 'READ_PHONE_STATE|RECEIVE_MMS|READ_MMS' /tmp/apk-permissions.txt; then
+            echo "ERROR: unnecessary sensitive permission remains in compiled APK"
             exit 1
           fi
           echo "=== Compiled APK manifest ==="
           "$AAPT" dump xmltree "$APK" AndroidManifest.xml | tee /tmp/apk-manifest.txt
-          if grep -E 'TransactionSmsReceiver|TransactionNotificationListener|NotificationListenerService|SMS_RECEIVED' /tmp/apk-manifest.txt; then
-            echo "ERROR: transaction capture component remains in compiled APK"
+          if ! grep -E 'TransactionSmsReceiver|SMS_RECEIVED' /tmp/apk-manifest.txt; then
+            echo "ERROR: optional SMS receiver missing from compiled APK"
             exit 1
           fi
-          echo "Verified compiled APK manifest is free of targeted SMS/notification capture entries."
+          if grep -E 'TransactionNotificationListener|NotificationListenerService' /tmp/apk-manifest.txt; then
+            echo "ERROR: notification listener should remain disabled"
+            exit 1
+          fi
+          echo "Verified optional SMS receiver included; notification listener disabled."
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
