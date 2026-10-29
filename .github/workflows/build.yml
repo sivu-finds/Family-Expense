@@ -99,6 +99,201 @@ jobs:
           print("Verified: SMS and notification capture source code removed")
           PY
 
+      - name: Implement Family Expense dashboard UI and app icon
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          root = Path("project/app/src/main")
+          java = root / "java/com/familyexpense/app/MainActivity.java"
+          java.write_text(r'''package com.familyexpense.app;
+
+import android.app.Activity;
+import android.app.AlertDialog;
+import android.graphics.Color;
+import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
+import android.os.Bundle;
+import android.text.Editable;
+import android.text.TextWatcher;
+import android.view.Gravity;
+import android.view.View;
+import android.view.Window;
+import android.view.WindowInsets;
+import android.view.WindowManager;
+import android.widget.*;
+import java.util.Locale;
+
+public class MainActivity extends Activity {
+    private ExpenseDb db;
+    private TextView total, recent, status, monthLabel;
+    private LinearLayout recentContainer;
+    private EditText search;
+    private WifiSyncServer sync;
+    private int red = Color.rgb(203, 44, 55);
+    private int ink = Color.rgb(32, 35, 42);
+    private int muted = Color.rgb(112, 117, 128);
+    private int canvas = Color.rgb(247, 248, 250);
+
+    @Override public void onCreate(Bundle state) {
+        super.onCreate(state);
+        getWindow().setStatusBarColor(Color.WHITE);
+        getWindow().setNavigationBarColor(Color.WHITE);
+        getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
+        db = new ExpenseDb(this);
+        buildUi();
+        refresh();
+    }
+
+    private GradientDrawable shape(int color, int radius) {
+        GradientDrawable d = new GradientDrawable();
+        d.setColor(color); d.setCornerRadius(dp(radius)); return d;
+    }
+    private int dp(float v) { return (int)(v * getResources().getDisplayMetrics().density + .5f); }
+    private TextView text(String value, int size, int color, boolean bold) {
+        TextView t = new TextView(this); t.setText(value); t.setTextSize(size); t.setTextColor(color);
+        if (bold) t.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        t.setGravity(Gravity.CENTER_VERTICAL); return t;
+    }
+    private LinearLayout column() { LinearLayout l = new LinearLayout(this); l.setOrientation(LinearLayout.VERTICAL); return l; }
+    private LinearLayout row() { LinearLayout l = new LinearLayout(this); l.setOrientation(LinearLayout.HORIZONTAL); l.setGravity(Gravity.CENTER_VERTICAL); return l; }
+    private LinearLayout.LayoutParams lp(int w, int h) { return new LinearLayout.LayoutParams(w < 0 ? w : dp(w), h < 0 ? h : dp(h)); }
+    private void pad(View v, int l, int t, int r, int b) { v.setPadding(dp(l),dp(t),dp(r),dp(b)); }
+    private TextView button(String label, boolean primary) {
+        TextView b = text(label, 14, primary ? Color.WHITE : red, true); b.setGravity(Gravity.CENTER);
+        b.setBackground(shape(primary ? red : Color.rgb(255,239,240), 15)); pad(b,16,0,16,0);
+        b.setMinHeight(dp(48)); b.setClickable(true); b.setFocusable(true); return b;
+    }
+    private void buildUi() {
+        ScrollView scroll = new ScrollView(this); scroll.setFillViewport(true); scroll.setBackgroundColor(canvas);
+        LinearLayout page = column(); pad(page,20,16,20,28);
+        scroll.addView(page); setContentView(scroll);
+
+        LinearLayout header = row();
+        LinearLayout brand = column();
+        brand.addView(text("Family Expense", 25, ink, true));
+        TextView subtitle = text("Your family's money, in one place", 13, muted, false);
+        LinearLayout.LayoutParams subLp = lp(-2,-2); subLp.topMargin=dp(4); brand.addView(subtitle,subLp);
+        header.addView(brand,new LinearLayout.LayoutParams(0,-2,1));
+        TextView avatar = text("₹",21,red,true); avatar.setGravity(Gravity.CENTER); avatar.setBackground(shape(Color.rgb(255,232,234),22));
+        header.addView(avatar,lp(46,46)); page.addView(header);
+
+        LinearLayout hero = column(); hero.setBackground(shape(red,24)); pad(hero,22,20,22,20);
+        LinearLayout.LayoutParams heroLp=lp(-1,-2); heroLp.topMargin=dp(24); page.addView(hero,heroLp);
+        hero.addView(text("TOTAL SPENT THIS MONTH",11,Color.rgb(255,220,222),true));
+        total=text("₹0.00",34,Color.WHITE,true); LinearLayout.LayoutParams amountLp=lp(-2,-2); amountLp.topMargin=dp(8); hero.addView(total,amountLp);
+        monthLabel=text("Track every rupee together",13,Color.WHITE,false); monthLabel.setAlpha(.9f);
+        LinearLayout.LayoutParams mlp=lp(-2,-2); mlp.topMargin=dp(5); hero.addView(monthLabel,mlp);
+        LinearLayout actions=row(); LinearLayout.LayoutParams actionsLp=lp(-1,50); actionsLp.topMargin=dp(18); hero.addView(actions,actionsLp);
+        TextView add=button("+  Add expense",true); add.setTextColor(red); add.setBackground(shape(Color.WHITE,14));
+        actions.addView(add,new LinearLayout.LayoutParams(0,-1,1)); add.setOnClickListener(v->addManual());
+        TextView history=button("History  ›",false); history.setTextColor(Color.WHITE); history.setBackground(shape(Color.rgb(177,34,45),14));
+        LinearLayout.LayoutParams histLp=new LinearLayout.LayoutParams(0,-1,1); histLp.leftMargin=dp(10); actions.addView(history,histLp);
+        history.setOnClickListener(v->showHistory());
+
+        LinearLayout section=row(); LinearLayout.LayoutParams secLp=lp(-1,-2); secLp.topMargin=dp(26); page.addView(section,secLp);
+        section.addView(text("Spending overview",18,ink,true),new LinearLayout.LayoutParams(0,-2,1));
+        section.addView(text("THIS MONTH",10,muted,true));
+        LinearLayout categories=row(); LinearLayout.LayoutParams catLp=lp(-1,104); catLp.topMargin=dp(12); page.addView(categories,catLp);
+        addCategory(categories,"◉","Food","Track meals",Color.rgb(255,239,224));
+        addCategory(categories,"⌂","Home","Bills & rent",Color.rgb(230,241,255));
+        addCategory(categories,"↗","Travel","Trips & fuel",Color.rgb(232,247,237));
+
+        LinearLayout recentHead=row(); LinearLayout.LayoutParams rh=lp(-1,-2); rh.topMargin=dp(25); page.addView(recentHead,rh);
+        recentHead.addView(text("Recent expenses",18,ink,true),new LinearLayout.LayoutParams(0,-2,1));
+        TextView see=text("View all",13,red,true); recentHead.addView(see); see.setOnClickListener(v->showHistory());
+
+        search=new EditText(this); search.setSingleLine(true); search.setTextSize(14); search.setHint("Search expenses"); search.setCompoundDrawablePadding(dp(8));
+        search.setBackground(shape(Color.WHITE,14)); pad(search,14,0,14,0); search.setMinHeight(dp(48));
+        LinearLayout.LayoutParams searchLp=lp(-1,48); searchLp.topMargin=dp(12); page.addView(search,searchLp);
+        recentContainer=column(); LinearLayout.LayoutParams listLp=lp(-1,-2); listLp.topMargin=dp(10); page.addView(recentContainer,listLp);
+        recent=text("",14,ink,false); recent.setGravity(Gravity.TOP); pad(recent,0,0,0,0);
+        status=text("Private by design • stored on this device",12,muted,false); pad(status,2,16,2,8);
+        LinearLayout.LayoutParams st=lp(-1,-2); st.topMargin=dp(10); page.addView(status,st);
+
+        LinearLayout tools=row(); LinearLayout.LayoutParams tlp=lp(-1,52); tlp.topMargin=dp(14); page.addView(tools,tlp);
+        TextView family=button("Family sync",false); tools.addView(family,new LinearLayout.LayoutParams(0,-1,1));
+        family.setOnClickListener(v->{new AlertDialog.Builder(this).setTitle("Family Wi-Fi sync").setMessage("Start the local test host on this device. Secure pairing and encrypted family sync are not implemented yet.").setNegativeButton("Cancel",null).setPositiveButton("Start host",(d,w)->{sync=new WifiSyncServer();sync.start(this);status.setText("Local Wi-Fi test host started. Secure pairing is still in development.");}).show();});
+        TextView importBtn=button("Import options",false); LinearLayout.LayoutParams ilp=new LinearLayout.LayoutParams(0,-1,1); ilp.leftMargin=dp(10); tools.addView(importBtn,ilp);
+        importBtn.setOnClickListener(v->new AlertDialog.Builder(this).setTitle("Transaction import").setMessage("Automatic SMS reading is not enabled in this safety-focused build. You can add expenses manually. Any future import feature will be optional and clearly explained.").setPositiveButton("Got it",null).show());
+        search.addTextChangedListener(new TextWatcher(){public void beforeTextChanged(CharSequence s,int st,int c,int a){} public void onTextChanged(CharSequence s,int start,int before,int count){filterRecent(s.toString());} public void afterTextChanged(Editable e){}});
+    }
+    private void addCategory(LinearLayout parent,String symbol,String title,String caption,int tint) {
+        LinearLayout card=column(); card.setBackground(shape(Color.WHITE,18)); pad(card,10,12,8,8);
+        LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(0,-1,1); p.rightMargin=dp(8); parent.addView(card,p);
+        TextView icon=text(symbol,19,red,true); icon.setGravity(Gravity.CENTER); icon.setBackground(shape(tint,12)); card.addView(icon,lp(38,36));
+        LinearLayout.LayoutParams t=lp(-1,-2); t.topMargin=dp(8); card.addView(text(title,13,ink,true),t);
+        card.addView(text(caption,10,muted,false));
+    }
+    private void refresh() {
+        total.setText("₹"+String.format(Locale.US,"%,.2f",db.total()));
+        String data=db.recent();
+        recent.setText(data == null || data.trim().isEmpty() ? "No expenses yet. Add your first expense to get started." : data);
+        filterRecent(search == null ? "" : search.getText().toString());
+    }
+    private void filterRecent(String q) {
+        if (recentContainer == null || recent == null) return;
+        recentContainer.removeAllViews();
+        String value=recent.getText().toString();
+        if(q != null && !q.trim().isEmpty() && !value.toLowerCase(Locale.ROOT).contains(q.trim().toLowerCase(Locale.ROOT))) value="No matching expenses. Try another search.";
+        LinearLayout card=column(); card.setBackground(shape(Color.WHITE,18)); pad(card,16,15,16,15);
+        TextView entry=text(value,14,ink,false); entry.setGravity(Gravity.TOP); card.addView(entry);
+        recentContainer.addView(card,lp(-1,-2));
+    }
+    private void addManual() {
+        LinearLayout form=column(); pad(form,8,0,8,0);
+        EditText desc=new EditText(this); desc.setSingleLine(true); desc.setHint("Merchant or description");
+        EditText amount=new EditText(this); amount.setSingleLine(true); amount.setHint("Amount in ₹"); amount.setInputType(8194);
+        Spinner category=new Spinner(this); String[] categories={"Food","Groceries","Travel","Home","Shopping","Health","Other"};
+        category.setAdapter(new ArrayAdapter<String>(this,android.R.layout.simple_spinner_dropdown_item,categories));
+        EditText member=new EditText(this); member.setSingleLine(true); member.setHint("Paid by (family member)");
+        EditText method=new EditText(this); method.setSingleLine(true); method.setHint("Payment method (cash, UPI, card)");
+        form.addView(desc); form.addView(amount); form.addView(text("Category",13,muted,true)); form.addView(category); form.addView(member); form.addView(method);
+        new AlertDialog.Builder(this).setTitle("Add expense").setView(form).setNegativeButton("Cancel",null).setPositiveButton("Save", (dialog,which)->{
+            try {
+                double value=Double.parseDouble(amount.getText().toString().trim());
+                if(value<=0) throw new NumberFormatException();
+                String name=desc.getText().toString().trim(); if(name.isEmpty()) name="Expense";
+                String who=member.getText().toString().trim(); if(who.isEmpty()) who="Family";
+                String pay=method.getText().toString().trim(); if(pay.isEmpty()) pay="Unspecified";
+                db.add(name,value,who,categories[category.getSelectedItemPosition()],pay,"manual");
+                refresh(); Toast.makeText(this,"Expense saved",Toast.LENGTH_SHORT).show();
+            } catch(Exception ex) { Toast.makeText(this,"Enter a valid amount greater than ₹0",Toast.LENGTH_LONG).show(); }
+        }).show();
+    }
+    private void showHistory() {
+        new AlertDialog.Builder(this).setTitle("Expense history").setMessage(recent.getText().toString()+"\n\nTotal recorded: ₹"+String.format(Locale.US,"%,.2f",db.total())).setPositiveButton("Add expense", (d,w)->addManual()).setNegativeButton("Close",null).show();
+    }
+    @Override protected void onResume(){super.onResume(); if(db!=null) refresh();}
+}
+''')
+          layout = root / "res/layout/activity_main.xml"
+          layout.parent.mkdir(parents=True, exist_ok=True)
+          layout.write_text('''<?xml version="1.0" encoding="utf-8"?>
+          <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+              android:layout_width="match_parent" android:layout_height="match_parent"
+              android:background="#F7F8FA" />
+          ''')
+          values = root / "res/values"
+          (values / "colors.xml").write_text('''<?xml version="1.0" encoding="utf-8"?>
+          <resources><color name="family_red">#CB2C37</color><color name="family_white">#FFFFFF</color><color name="family_canvas">#F7F8FA</color></resources>''')
+          icon_dir = root / "res/drawable"
+          icon_dir.mkdir(parents=True, exist_ok=True)
+          (icon_dir / "ic_family_expense.xml").write_text('''<?xml version="1.0" encoding="utf-8"?>
+          <vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+            <path android:fillColor="#CB2C37" android:pathData="M0,0h108v108h-108z"/>
+            <path android:fillColor="#FFFFFF" android:pathData="M20,46 L54,18 L88,46 L82,53 L76,48 L76,84 L59,84 L59,62 L49,62 L49,84 L32,84 L32,48 L26,53 Z"/>
+            <path android:fillColor="#CB2C37" android:pathData="M42,34h24v4h-24z M42,41h24v4h-24z"/>
+          </vector>''')
+          manifest = root / "AndroidManifest.xml"
+          import xml.etree.ElementTree as ET
+          ET.register_namespace('android','http://schemas.android.com/apk/res/android')
+          tree=ET.parse(manifest); app=tree.getroot().find('application')
+          app.set('{http://schemas.android.com/apk/res/android}icon','@drawable/ic_family_expense')
+          app.set('{http://schemas.android.com/apk/res/android}roundIcon','@drawable/ic_family_expense')
+          tree.write(manifest,encoding='utf-8',xml_declaration=True)
+          print("Wrote redesigned dashboard, expense form, safe-area-friendly screen, and launcher icon.")
+          PY
+
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
