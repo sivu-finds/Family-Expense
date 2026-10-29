@@ -100,7 +100,7 @@ jobs:
           PY
 
       - name: Implement Family Expense dashboard UI and app icon
-          run: |
+        run: |
           python3 - <<'PY'
           from pathlib import Path
           root = Path("project/app/src/main")
