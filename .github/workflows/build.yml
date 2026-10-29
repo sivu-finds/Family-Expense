@@ -46,7 +46,27 @@ jobs:
               raise SystemExit("Expected transaction SMS receiver missing from source ZIP")
           if "onReceive" not in receiver.read_text(errors="ignore"):
               raise SystemExit("SMS receiver source did not pass basic validation")
-          print("Optional SMS receiver retained. User consent will be requested in the app.")
+          # Keep SMS receiver only; notification-listener capture is not part of this build.
+          for rel in (
+              "java/com/familyexpense/app/TransactionNotificationListener.java",
+              "res/xml/notification_listener_service.xml",
+          ):
+              path = root / rel
+              if path.exists():
+                  path.unlink()
+                  print(f"Removed notification listener source/resource: {path}")
+          import xml.etree.ElementTree as ET
+          android = '{http://schemas.android.com/apk/res/android}'
+          ET.register_namespace('android', 'http://schemas.android.com/apk/res/android')
+          manifest = root / "AndroidManifest.xml"
+          tree = ET.parse(manifest)
+          app = tree.getroot().find('application')
+          if app is not None:
+              for node in list(app):
+                  if node.tag == 'service' and ('NotificationListener' in node.get(android + 'name', '') or 'BIND_NOTIFICATION_LISTENER_SERVICE' in ''.join(x.get(android + 'name', '') for x in node.iter())):
+                      app.remove(node)
+          tree.write(manifest, encoding='utf-8', xml_declaration=True)
+          print("Optional SMS receiver retained; notification listener removed.")
           PY
 
       - name: Implement Family Expense dashboard UI and app icon
