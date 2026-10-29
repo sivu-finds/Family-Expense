@@ -374,15 +374,11 @@ jobs:
             }
             static void handleSharedText(Activity a, android.content.Intent intent, ExpenseDb db, Done done){
               if(intent==null || !android.content.Intent.ACTION_SEND.equals(intent.getAction()))return;
-              String type=intent.getType();
-              if(type==null || !type.startsWith("text/"))return;
+              String type=intent.getType(); if(type==null || !type.startsWith("text/"))return;
               CharSequence shared=intent.getCharSequenceExtra(android.content.Intent.EXTRA_TEXT);
               if(shared==null || shared.toString().trim().isEmpty())return;
               JSONObject item=parse("Shared bank SMS",shared.toString(),System.currentTimeMillis());
-              if(item==null){
-                new AlertDialog.Builder(a).setTitle("No transaction detected").setMessage("This shared message did not match a supported transaction alert. You can still add the expense manually.").setPositiveButton("OK",null).show();
-                return;
-              }
+              if(item==null){new AlertDialog.Builder(a).setTitle("No transaction detected").setMessage("This shared message did not match a supported transaction alert. You can still add the expense manually.").setPositiveButton("OK",null).show();return;}
               ArrayList<JSONObject> rows=new ArrayList<>();rows.add(item);review(a,db,rows,done);
             }
           }'''
