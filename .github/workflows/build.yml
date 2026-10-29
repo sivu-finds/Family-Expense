@@ -265,6 +265,18 @@ jobs:
           private void showHistory() {
           new AlertDialog.Builder(this).setTitle("Expense history").setMessage(recent.getText().toString()+"\n\nTotal recorded: ₹"+String.format(Locale.US,"%,.2f",db.total())).setPositiveButton("Add expense", (d,w)->addManual()).setNegativeButton("Close",null).show();
           }
+          @Override public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+          super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+          if (requestCode == 602) {
+              if (grantResults.length > 0 && grantResults[0] == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                  FeatureBridge.showSmsImport(this, db, () -> refresh());
+              } else {
+                  new AlertDialog.Builder(this).setTitle("SMS permission not granted")
+                    .setMessage("To import bank transaction alerts, allow SMS access in the Android permission prompt. You can still add expenses manually.")
+                    .setPositiveButton("OK", null).show();
+              }
+          }
+          }
           @Override protected void onResume(){super.onResume(); if(db!=null) refresh();}
           }
           ''')
@@ -410,6 +422,9 @@ jobs:
           grep -q "AES/GCM/NoPadding" project/app/src/main/java/com/familyexpense/app/FeatureBridge.java
           grep -q "showSmsImport" project/app/src/main/java/com/familyexpense/app/FeatureBridge.java
           grep -q "mergeFromSync" project/app/src/main/java/com/familyexpense/app/ExpenseDb.java
+          grep -q "family.setOnClickListener(v->FeatureBridge.showSync" project/app/src/main/java/com/familyexpense/app/MainActivity.java
+          grep -q "importBtn.setOnClickListener(v->FeatureBridge.showSmsImport" project/app/src/main/java/com/familyexpense/app/MainActivity.java
+          grep -q "onRequestPermissionsResult" project/app/src/main/java/com/familyexpense/app/MainActivity.java
           "$AAPT" dump permissions "$APK" | tee /tmp/apk-permissions.txt
           grep -q "android.permission.READ_SMS" /tmp/apk-permissions.txt
           grep -q "android.permission.INTERNET" /tmp/apk-permissions.txt
