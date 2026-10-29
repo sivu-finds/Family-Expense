@@ -20,6 +20,13 @@ jobs:
           cd project
           find . -maxdepth 3 -type f | head -50
 
+      - name: Inspect transaction capture source references
+        run: |
+          echo "=== Capture source files ==="
+          find project -type f | grep -Ei 'TransactionSmsReceiver|TransactionNotificationListener|NotificationListener|SmsReceiver' || true
+          echo "=== References ==="
+          grep -RInE 'TransactionSmsReceiver|TransactionNotificationListener|NotificationListenerService|READ_SMS|RECEIVE_SMS|SMS_RECEIVED' project/app/src/main || true
+
       - name: Remove sensitive SMS and notification-listener access for safer sideload build
         run: |
           python3 - <<'PY'
