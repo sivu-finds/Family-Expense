@@ -30,9 +30,14 @@ jobs:
               raise SystemExit("AndroidManifest.xml not found")
           for path in manifests:
               text = path.read_text()
-              text = re.sub(r'^.*android\\.permission\\.(READ_SMS|RECEIVE_SMS|READ_PHONE_STATE|RECEIVE_MMS|READ_MMS|SMS_RECEIVED).*\\n', '', text, flags=re.MULTILINE)
-              # Disable notification-listener services that can read transaction notifications.
+              # Remove SMS/phone permissions using correctly escaped regular expressions.
+              text = re.sub(r'^.*android.permission.(READ_SMS|RECEIVE_SMS|READ_PHONE_STATE|RECEIVE_MMS|READ_MMS).*\\n', '', text, flags=re.MULTILINE)
+              # Remove the SMS receiver and notification listener components.
+              text = re.sub(r'^[ \\t]*<receiver\\b(?:(?!</receiver>).)*SMS_RECEIVED(?:(?!</receiver>).)*</receiver>\\s*', '', text, flags=re.MULTILINE | re.DOTALL)
               text = re.sub(r'^[ \\t]*<service\\b(?:(?!</service>).)*NotificationListenerService(?:(?!</service>).)*</service>\\s*', '', text, flags=re.MULTILINE | re.DOTALL)
+              text = text.replace(' android:usesCleartextTraffic="true"', '')
+              if 'READ_SMS' in text or 'RECEIVE_SMS' in text or 'NotificationListenerService' in text or 'SMS_RECEIVED' in text:
+                  raise SystemExit(f"Sensitive SMS/listener entry remains in {path}")
               path.write_text(text)
               print(f"Reduced sensitive permissions in {path}")
           PY
