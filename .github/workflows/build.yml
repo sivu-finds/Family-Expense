@@ -119,7 +119,7 @@ jobs:
           getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
           db = new ExpenseDb(this);
           buildUi();
-          // Process only SMS text explicitly shared by the user; no inbox permission is requested.
+          // SMS inbox scanning is user-triggered and requires READ_SMS permission.
           // Android 15+ edge-to-edge: explicitly keep content below the status bar
           // and above the navigation/gesture area using the actual system insets.
           View content = findViewById(android.R.id.content);
@@ -408,7 +408,6 @@ jobs:
             if name not in have: el=ET.Element("uses-permission");el.set(android+"name",name);node.insert(0,el)
           app=node.find("application")
           app.set(android+"usesCleartextTraffic","false")
-          # Accept only user-initiated shared text, such as a selected bank SMS.
           activity=next((x for x in app.findall("activity") if x.get(android+"name","").endswith("MainActivity")),None)
           if activity is None: raise SystemExit("MainActivity not found for share-import intent filter")
           found=False
@@ -422,7 +421,7 @@ jobs:
             ET.SubElement(filt,"category").set(android+"name","android.intent.category.DEFAULT")
             ET.SubElement(filt,"data").set(android+"mimeType","text/plain")
           tree.write(manifest,encoding="utf-8",xml_declaration=True)
-          print("Added user-selected shared SMS import without inbox-reading permission and AES-GCM encrypted two-way LAN sync.")
+          print("Added user-triggered inbox SMS scanning and encrypted two-way LAN sync.")
           PY
 
       - name: Set up Java
