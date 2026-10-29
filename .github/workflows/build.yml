@@ -59,6 +59,37 @@ jobs:
               print(f"Verified reduced-permission manifest: {path}")
           PY
 
+      - name: Remove SMS and notification capture code from compiled app
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          root = Path("project/app/src/main")
+          # Remove the two source components that read transaction SMS or notifications.
+          for rel in (
+              "java/com/familyexpense/app/TransactionSmsReceiver.java",
+              "java/com/familyexpense/app/TransactionNotificationListener.java",
+              "res/xml/notification_listener_service.xml",
+          ):
+              path = root / rel
+              if path.exists():
+                  path.unlink()
+                  print(f"Removed sensitive capture source/resource: {path}")
+          # Remove the runtime request for SMS permissions from MainActivity.
+          activity = root / "java/com/familyexpense/app/MainActivity.java"
+          source = activity.read_text()
+          lines = source.splitlines(keepends=True)
+          filtered = [line for line in lines if "Manifest.permission.READ_SMS" not in line and "Manifest.permission.RECEIVE_SMS" not in line]
+          activity.write_text("".join(filtered))
+          # Fail closed if sensitive permission requests or capture class references remain.
+          scan = "\\n".join(p.read_text(errors="ignore") for p in root.rglob("*.java"))
+          forbidden = ("Manifest.permission.READ_SMS", "Manifest.permission.RECEIVE_SMS", "TransactionSmsReceiver", "TransactionNotificationListener", "NotificationListenerService", "SMS_RECEIVED")
+          remaining = [item for item in forbidden if item in scan]
+          if remaining:
+              raise SystemExit("Sensitive capture code remains in Java sources: " + ", ".join(remaining))
+          print("Verified: SMS and notification capture source code removed")
+          PY
+
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
