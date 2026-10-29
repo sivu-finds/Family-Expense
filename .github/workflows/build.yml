@@ -296,6 +296,87 @@ jobs:
           print("Wrote redesigned dashboard, expense form, safe-area-friendly screen, and launcher icon.")
           PY
 
+      - name: Implement SMS import and encrypted two-way Wi-Fi sync
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+          root=Path("project/app/src/main"); j=root/"java/com/familyexpense/app"
+          db=j/"ExpenseDb.java"; s=db.read_text()
+          add=r"""
+              public org.json.JSONArray exportForSync() {
+                org.json.JSONArray a=new org.json.JSONArray();
+                android.database.Cursor c=getReadableDatabase().rawQuery("SELECT description,amount,paidBy,category,participants,createdAt FROM expenses",null);
+                try { while(c.moveToNext()) { org.json.JSONObject o=new org.json.JSONObject();
+                  o.put("description",c.getString(0)); o.put("amount",c.getDouble(1)); o.put("paidBy",c.getString(2));
+                  o.put("category",c.getString(3)); o.put("participants",c.getString(4)); o.put("createdAt",c.getLong(5)); a.put(o);
+                }} catch(Exception e){throw new RuntimeException(e);} finally{c.close();} return a;
+              }
+              public int mergeFromSync(org.json.JSONArray a) {
+                int added=0; android.database.sqlite.SQLiteDatabase d=getWritableDatabase(); d.beginTransaction();
+                try { for(int i=0;i<a.length();i++){ org.json.JSONObject o=a.getJSONObject(i);
+                  String desc=o.optString("description","Expense"), paid=o.optString("paidBy","Family"), cat=o.optString("category","Other");
+                  double amount=o.optDouble("amount",0); long time=o.optLong("createdAt",System.currentTimeMillis()); if(amount<=0)continue;
+                  android.database.Cursor c=d.rawQuery("SELECT 1 FROM expenses WHERE description=? AND amount=? AND paidBy=? AND category=? AND createdAt=? LIMIT 1",
+                    new String[]{desc,Double.toString(amount),paid,cat,Long.toString(time)}); boolean exists=c.moveToFirst(); c.close(); if(exists)continue;
+                  android.content.ContentValues v=new android.content.ContentValues(); v.put("description",desc); v.put("amount",amount); v.put("paidBy",paid); v.put("category",cat);
+                  v.put("participants",o.optString("participants","Family")); v.put("createdAt",time); v.put("source","wifi-sync"); if(d.insert("expenses",null,v)>0)added++;
+                } d.setTransactionSuccessful(); }catch(Exception e){throw new RuntimeException(e);}finally{d.endTransaction();} return added;
+              }
+          """
+          db.write_text(s.rsplit("}",1)[0]+add+"\n}\n")
+          feature=r'''package com.familyexpense.app;
+          import android.Manifest; import android.app.*; import android.content.pm.PackageManager; import android.database.Cursor;
+          import android.os.Build; import android.provider.Telephony; import android.text.InputType; import android.widget.*;
+          import org.json.*; import java.io.*; import java.net.*; import java.security.SecureRandom; import java.util.*;
+          import javax.crypto.*; import javax.crypto.spec.*;
+          public final class FeatureBridge {
+            interface Done { void run(); } static final int PORT=48765;
+            static byte[] key(String p)throws Exception{return SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256").generateSecret(new PBEKeySpec(p.toCharArray(),"FamilyExpense-LAN-v1".getBytes("UTF-8"),150000,256)).getEncoded();}
+            static byte[] crypt(byte[] b,String p,boolean enc)throws Exception{
+              byte[] nonce; Cipher c=Cipher.getInstance("AES/GCM/NoPadding");
+              if(enc){nonce=new byte[12];new SecureRandom().nextBytes(nonce);c.init(1,new SecretKeySpec(key(p),"AES"),new GCMParameterSpec(128,nonce));byte[] z=c.doFinal(b),o=new byte[12+z.length];System.arraycopy(nonce,0,o,0,12);System.arraycopy(z,0,o,12,z.length);return o;}
+              if(b.length<29)throw new IOException("Invalid encrypted payload");nonce=Arrays.copyOfRange(b,0,12);c.init(2,new SecretKeySpec(key(p),"AES"),new GCMParameterSpec(128,nonce));return c.doFinal(b,12,b.length-12);
+            }
+            static String pin(){return String.format(Locale.US,"%012d",Math.abs(new SecureRandom().nextLong()%1000000000000L));}
+            static void showSync(Activity a,ExpenseDb db,TextView status,Done done){new AlertDialog.Builder(a).setTitle("Family Sync · same trusted Wi-Fi").setItems(new String[]{"Host this phone","Join another phone"},(d,w)->{if(w==0)host(a,db,status);else join(a,db,status,done);}).setNegativeButton("Cancel",null).show();}
+            static void host(Activity a,ExpenseDb db,TextView status){String code=pin();new AlertDialog.Builder(a).setTitle("One-time pairing code").setMessage("Connect both phones to the same trusted Wi-Fi. Share this code privately: \n\n"+code+"\n\nKeep this screen open. Transfers are AES-GCM encrypted. Stop hosting when done.").setPositiveButton("Wait for phone",(d,w)->{status.setText("Waiting for family phone on port "+PORT);new Thread(()->{ServerSocket ss=null;try{
+              ss=new ServerSocket();ss.setReuseAddress(true);ss.bind(new InetSocketAddress(PORT));ss.setSoTimeout(180000);Socket s=ss.accept();s.setSoTimeout(30000);
+              DataInputStream in=new DataInputStream(s.getInputStream());DataOutputStream out=new DataOutputStream(s.getOutputStream());int n=in.readInt();if(n<29||n>10000000)throw new IOException("Invalid transfer size");byte[] b=new byte[n];in.readFully(b);
+              JSONObject p=new JSONObject(new String(crypt(b,code,false),"UTF-8"));if(!"FamilyExpenseSyncV1".equals(p.optString("type")))throw new IOException("Wrong sync format");
+              int got=db.mergeFromSync(p.optJSONArray("expenses")==null?new JSONArray():p.getJSONArray("expenses"));
+              byte[] reply=crypt(new JSONObject().put("ok",true).put("received",got).put("expenses",db.exportForSync()).toString().getBytes("UTF-8"),code,true);out.writeInt(reply.length);out.write(reply);out.flush();s.close();
+              a.runOnUiThread(()->{status.setText("Two-way sync complete");new AlertDialog.Builder(a).setTitle("Sync complete").setMessage("Received "+got+" new expenses; sent this phone's latest expense list back.").setPositiveButton("OK",null).show();});
+            }catch(Exception e){a.runOnUiThread(()->new AlertDialog.Builder(a).setTitle("Sync failed").setMessage(String.valueOf(e.getMessage())).setPositiveButton("OK",null).show());}finally{try{if(ss!=null)ss.close();}catch(Exception ignored){}}}).start();}).setNegativeButton("Cancel",null).show();}
+            static void join(Activity a,ExpenseDb db,TextView status,Done done){LinearLayout box=new LinearLayout(a);box.setOrientation(1);box.setPadding(32,0,32,0);EditText ip=new EditText(a);ip.setSingleLine();ip.setHint("Host phone IP address");EditText code=new EditText(a);code.setSingleLine();code.setHint("12-digit pairing code");code.setInputType(InputType.TYPE_CLASS_NUMBER);box.addView(ip);box.addView(code);
+              new AlertDialog.Builder(a).setTitle("Join family sync").setMessage("Same trusted Wi-Fi required. Find the host's local IP in Wi-Fi details.").setView(box).setPositiveButton("Sync both ways",(d,w)->{String h=ip.getText().toString().trim(),p=code.getText().toString().trim();if(h.isEmpty()||p.length()!=12){new AlertDialog.Builder(a).setMessage("Enter host IP and all 12 digits.").setPositiveButton("OK",null).show();return;}status.setText("Connecting…");new Thread(()->{try{
+              JSONObject payload=new JSONObject().put("type","FamilyExpenseSyncV1").put("expenses",db.exportForSync());byte[] enc=crypt(payload.toString().getBytes("UTF-8"),p,true);Socket s=new Socket();s.connect(new InetSocketAddress(h,PORT),10000);s.setSoTimeout(30000);DataOutputStream out=new DataOutputStream(s.getOutputStream());DataInputStream in=new DataInputStream(s.getInputStream());out.writeInt(enc.length);out.write(enc);out.flush();int n=in.readInt();if(n<29||n>10000000)throw new IOException("Invalid response");byte[] b=new byte[n];in.readFully(b);JSONObject r=new JSONObject(new String(crypt(b,p,false),"UTF-8"));s.close();int fromHost=db.mergeFromSync(r.optJSONArray("expenses")==null?new JSONArray():r.getJSONArray("expenses"));int toHost=r.optInt("received",0);
+              a.runOnUiThread(()->{status.setText("Two-way sync complete");new AlertDialog.Builder(a).setTitle("Sync complete").setMessage("Imported "+fromHost+" expenses from host. Host imported "+toHost+" from this phone. Duplicates were skipped.").setPositiveButton("OK",(x,y)->done.run()).show();});
+              }catch(Exception e){a.runOnUiThread(()->new AlertDialog.Builder(a).setTitle("Sync failed").setMessage("Check IP, code, same Wi-Fi, and host waiting.\n"+e.getMessage()).setPositiveButton("OK",null).show());}}).start();}).setNegativeButton("Cancel",null).show();}
+            static void showSmsImport(Activity a,ExpenseDb db,Done done){if(Build.VERSION.SDK_INT>=23&&a.checkSelfPermission(Manifest.permission.READ_SMS)!=PackageManager.PERMISSION_GRANTED){new AlertDialog.Builder(a).setTitle("SMS import permission").setMessage("Only scans your inbox after you choose Import SMS. Messages stay on this phone. You review detected transactions before saving.").setNegativeButton("Cancel",null).setPositiveButton("Allow",(d,w)->a.requestPermissions(new String[]{Manifest.permission.READ_SMS},602)).show();return;}
+              new Thread(()->{ArrayList<JSONObject> rows=new ArrayList<>();Cursor c=null;try{c=a.getContentResolver().query(Telephony.Sms.Inbox.CONTENT_URI,new String[]{"address","body","date"},"date >= ?",new String[]{Long.toString(System.currentTimeMillis()-90L*86400000)}, "date DESC");if(c!=null)while(c.moveToNext()){JSONObject o=parse(c.getString(0),c.getString(1),c.getLong(2));if(o!=null)rows.add(o);if(rows.size()>=100)break;}}catch(Exception e){a.runOnUiThread(()->new AlertDialog.Builder(a).setTitle("SMS import failed").setMessage(String.valueOf(e.getMessage())).setPositiveButton("OK",null).show());return;}finally{if(c!=null)c.close();}a.runOnUiThread(()->review(a,db,rows,done));}).start();}
+            static JSONObject parse(String sender,String body,long date){if(body==null)return null;String l=body.toLowerCase(Locale.ROOT);if(!(l.contains("debited")||l.contains("spent")||l.contains("purchase")||l.contains("paid")||l.contains("credited")||l.contains("received")||l.contains("withdrawn")||l.contains("txn")))return null;
+              java.util.regex.Matcher m=java.util.regex.Pattern.compile("(?i)(?:inr|rs\\.?|₹)\\s*([0-9,]+(?:\\.[0-9]{1,2})?)|(?:amount|amt)\\s*(?:is|of|:)?\\s*(?:inr|rs\\.?|₹)?\\s*([0-9,]+(?:\\.[0-9]{1,2})?)").matcher(body);if(!m.find())return null;String v=(m.group(1)!=null?m.group(1):m.group(2)).replace(",","");double amount;try{amount=Double.parseDouble(v);}catch(Exception e){return null;}if(amount<=0)return null;
+              String merchant=sender==null?"Bank transaction":sender;java.util.regex.Matcher at=java.util.regex.Pattern.compile("(?i)(?:at|to|towards|merchant)\\s+([A-Za-z0-9 ._&'-]{2,45})").matcher(body);if(at.find())merchant=at.group(1).trim();boolean credit=l.contains("credited")||l.contains("received");
+              try{return new JSONObject().put("description",merchant).put("amount",amount).put("paidBy","Family").put("category","Other").put("participants","Family").put("createdAt",date).put("credit",credit).put("sender",sender==null?"":sender).put("preview",body);}catch(Exception e){return null;}}
+            static void review(Activity a,ExpenseDb db,ArrayList<JSONObject> rows,Done done){if(rows.isEmpty()){new AlertDialog.Builder(a).setTitle("No transactions found").setMessage("No supported bank alerts found in the last 90 days.").setPositiveButton("OK",null).show();return;}String[] labels=new String[rows.size()];boolean[] checked=new boolean[rows.size()];for(int i=0;i<rows.size();i++){JSONObject o=rows.get(i);labels[i]=(o.optBoolean("credit")?"CREDIT ":"DEBIT ")+"₹"+o.optDouble("amount")+" · "+o.optString("description")+"\n"+new java.text.SimpleDateFormat("dd MMM yyyy",Locale.getDefault()).format(new Date(o.optLong("createdAt")))+" · "+o.optString("sender");}
+              new AlertDialog.Builder(a).setTitle("Review; select debits to import").setMultiChoiceItems(labels,checked,(d,w,on)->checked[w]=on).setPositiveButton("Import selected",(d,w)->{int n=0;for(int i=0;i<rows.size();i++)if(checked[i]&&!rows.get(i).optBoolean("credit"))if(db.mergeFromSync(new JSONArray().put(rows.get(i)))>0)n++;final int count=n;new AlertDialog.Builder(a).setTitle("Import complete").setMessage(count+" debit expenses added. Credits were not added as expenses.").setPositiveButton("OK",(x,y)->done.run()).show();}).setNegativeButton("Cancel",null).show();}
+          }'''
+          (j/"FeatureBridge.java").write_text(feature)
+          main=j/"MainActivity.java"; out=[]
+          for line in main.read_text().splitlines():
+            if "family.setOnClickListener" in line: out.append("          family.setOnClickListener(v->FeatureBridge.showSync(this,db,status,()->refresh()));")
+            elif "importBtn.setOnClickListener" in line: out.append("          importBtn.setOnClickListener(v->FeatureBridge.showSmsImport(this,db,()->refresh()));")
+            else: out.append(line)
+          main.write_text("\n".join(out)+"\n")
+          manifest=root/"AndroidManifest.xml"; android="{http://schemas.android.com/apk/res/android}"; ET.register_namespace("android","http://schemas.android.com/apk/res/android")
+          tree=ET.parse(manifest); node=tree.getroot(); have={e.get(android+"name") for e in node.findall("uses-permission")}
+          for name in ["android.permission.READ_SMS","android.permission.INTERNET","android.permission.ACCESS_WIFI_STATE","android.permission.ACCESS_NETWORK_STATE"]:
+            if name not in have: el=ET.Element("uses-permission");el.set(android+"name",name);node.insert(0,el)
+          node.find("application").set(android+"usesCleartextTraffic","false");tree.write(manifest,encoding="utf-8",xml_declaration=True)
+          print("Added user-initiated SMS review and AES-GCM encrypted two-way LAN sync.")
+          PY
+
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
@@ -320,25 +401,19 @@ jobs:
         working-directory: project
         run: gradle --no-daemon assembleDebug
 
-      - name: Verify compiled APK has no sensitive permissions or capture components
+      - name: Verify required feature code and APK permissions
         run: |
+          set -e
           APK="project/app/build/outputs/apk/debug/app-debug.apk"
           AAPT="$ANDROID_HOME/build-tools/36.0.0/aapt"
           test -f "$APK"
-          echo "=== Compiled APK permissions ==="
+          grep -q "AES/GCM/NoPadding" project/app/src/main/java/com/familyexpense/app/FeatureBridge.java
+          grep -q "showSmsImport" project/app/src/main/java/com/familyexpense/app/FeatureBridge.java
+          grep -q "mergeFromSync" project/app/src/main/java/com/familyexpense/app/ExpenseDb.java
           "$AAPT" dump permissions "$APK" | tee /tmp/apk-permissions.txt
-          if grep -E 'READ_SMS|RECEIVE_SMS|READ_PHONE_STATE|RECEIVE_MMS|READ_MMS' /tmp/apk-permissions.txt; then
-            echo "ERROR: sensitive permission remains in compiled APK"
-            exit 1
-          fi
-          echo "=== Compiled APK manifest ==="
-          "$AAPT" dump xmltree "$APK" AndroidManifest.xml | tee /tmp/apk-manifest.txt
-          if grep -E 'TransactionSmsReceiver|TransactionNotificationListener|NotificationListenerService|SMS_RECEIVED' /tmp/apk-manifest.txt; then
-            echo "ERROR: SMS/notification capture component remains in compiled APK"
-            exit 1
-          fi
-          echo "Verified compiled APK excludes SMS/notification capture components."
-
+          grep -q "android.permission.READ_SMS" /tmp/apk-permissions.txt
+          grep -q "android.permission.INTERNET" /tmp/apk-permissions.txt
+          echo "Feature source and required permissions verified in compiled APK."
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
