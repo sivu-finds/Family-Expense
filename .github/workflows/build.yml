@@ -20,6 +20,15 @@ jobs:
           cd project
           find . -maxdepth 3 -type f | head -50
 
+      - name: Inspect current app UI source
+        run: |
+          echo "=== MainActivity.java ==="
+          sed -n '1,260p' project/app/src/main/java/com/familyexpense/app/MainActivity.java
+          echo "=== Manifest ==="
+          cat project/app/src/main/AndroidManifest.xml
+          echo "=== Resource files ==="
+          find project/app/src/main/res -maxdepth 3 -type f -print
+
       - name: Inspect transaction capture source references
         run: |
           echo "=== Capture source files ==="
