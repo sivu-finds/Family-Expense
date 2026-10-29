@@ -2,6 +2,9 @@ name: Build Family Expense APK
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - build-apk-*
 
 jobs:
   build:
