@@ -119,6 +119,8 @@ jobs:
           getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
           db = new ExpenseDb(this);
           buildUi();
+          // Process only SMS text explicitly shared by the user; no inbox permission is requested.
+          FeatureBridge.handleSharedText(this, getIntent(), db, () -> refresh());
           // Android 15+ edge-to-edge: explicitly keep content below the status bar
           // and above the navigation/gesture area using the actual system insets.
           View content = findViewById(android.R.id.content);
@@ -365,34 +367,24 @@ jobs:
               JSONObject payload=new JSONObject().put("type","FamilyExpenseSyncV1").put("expenses",db.exportForSync());byte[] enc=crypt(payload.toString().getBytes("UTF-8"),p,true);Socket s=new Socket();s.connect(new InetSocketAddress(h,PORT),10000);s.setSoTimeout(30000);DataOutputStream out=new DataOutputStream(s.getOutputStream());DataInputStream in=new DataInputStream(s.getInputStream());out.writeInt(enc.length);out.write(enc);out.flush();int n=in.readInt();if(n<29||n>10000000)throw new IOException("Invalid response");byte[] b=new byte[n];in.readFully(b);JSONObject r=new JSONObject(new String(crypt(b,p,false),"UTF-8"));s.close();int fromHost=db.mergeFromSync(r.optJSONArray("expenses")==null?new JSONArray():r.getJSONArray("expenses"));int toHost=r.optInt("received",0);
               a.runOnUiThread(()->{status.setText("Two-way sync complete");new AlertDialog.Builder(a).setTitle("Sync complete").setMessage("Imported "+fromHost+" expenses from host. Host imported "+toHost+" from this phone. Duplicates were skipped.").setPositiveButton("OK",(x,y)->done.run()).show();});
               }catch(Exception e){a.runOnUiThread(()->new AlertDialog.Builder(a).setTitle("Sync failed").setMessage("Check IP, code, same Wi-Fi, and host waiting.\n"+e.getMessage()).setPositiveButton("OK",null).show());}}).start();}).setNegativeButton("Cancel",null).show();}
-            static void showSmsImport(Activity a,ExpenseDb db,Done done){if(Build.VERSION.SDK_INT>=23&&a.checkSelfPermission(Manifest.permission.READ_SMS)!=PackageManager.PERMISSION_GRANTED){new AlertDialog.Builder(a).setTitle("Allow SMS scanning").setMessage("Family Expense scans inbox messages from the last 90 days only after you choose Import SMS. Transaction detection happens on this phone. You review detected transactions before saving; SMS import does not upload message text.").setNegativeButton("Cancel",null).setPositiveButton("Allow",(d,w)->a.requestPermissions(new String[]{Manifest.permission.READ_SMS},602)).show();return;}
-              new Thread(()->{ArrayList<JSONObject> rows=new ArrayList<>();Cursor c=null;try{c=a.getContentResolver().query(Telephony.Sms.Inbox.CONTENT_URI,new String[]{"address","body","date"},"date >= ?",new String[]{Long.toString(System.currentTimeMillis()-90L*86400000)}, "date DESC");if(c!=null)while(c.moveToNext()){JSONObject o=parse(c.getString(0),c.getString(1),c.getLong(2));if(o!=null)rows.add(o);if(rows.size()>=100)break;}}catch(Exception e){a.runOnUiThread(()->new AlertDialog.Builder(a).setTitle("SMS import failed").setMessage(String.valueOf(e.getMessage())).setPositiveButton("OK",null).show());return;}finally{if(c!=null)c.close();}a.runOnUiThread(()->review(a,db,rows,done));}).start();}
-            static JSONObject parse(String sender,String body,long date){
-              if(body==null||body.trim().isEmpty())return null;
-              String l=body.toLowerCase(Locale.ROOT);
-              // Ignore OTP/login/security codes and transactions explicitly marked failed or declined.
-              if(l.contains("one time password")||l.contains("otp")||l.contains("verification code")||l.contains("cvv")||l.contains("pin is")||l.contains("transaction failed")||l.contains("txn failed")||l.contains("payment declined")||l.contains("transaction declined"))return null;
-              boolean credit=l.contains("credited")||l.contains("received")||l.contains("refund")||l.contains("reversal")||l.contains("reversed")||l.contains("cashback")||l.contains("cash back")||l.contains("deposit");
-              boolean transaction=credit||java.util.regex.Pattern.compile("(?i)\\b(debited|debit|withdrawn|withdrawal|spent|paid|purchase|sent|transferred|transfer|txn|transaction successful|payment successful)\\b").matcher(l).find();
-              if(!transaction)return null;
-              // Supports common Indian bank/UPI currency formats.
-              java.util.regex.Matcher m=java.util.regex.Pattern.compile("(?i)(?:\\b(?:inr|rs\\.?|₹)\\s*([0-9,]+(?:\\.[0-9]{1,2})?)|(?:amount|amt)\\s*(?:is|of|:)?\\s*(?:inr|rs\\.?|₹)?\\s*([0-9,]+(?:\\.[0-9]{1,2})?))").matcher(body);
-              if(!m.find())return null;
-              String raw=m.group(1)!=null?m.group(1):m.group(2); double amount;
-              try{amount=Double.parseDouble(raw.replace(",",""));}catch(Exception e){return null;}
-              if(amount<=0||Double.isNaN(amount)||Double.isInfinite(amount))return null;
-              String merchant=sender==null||sender.trim().isEmpty()?"Bank transaction":sender.trim();
-              java.util.regex.Matcher at=java.util.regex.Pattern.compile("(?i)(?:to|at|towards|merchant(?: name)?|vpa)[:\\s]+([A-Za-z0-9][A-Za-z0-9 ._@&'-]{1,55})").matcher(body);
-              if(at.find()){
-                String found=at.group(1).split("(?i)\\b(?:on|ref|utr|upi|from|using|via|account|a/c|ending|available balance)\\b")[0].trim();
-                found=found.replaceAll("[.,;:]+$","").trim();
-                if(!found.isEmpty())merchant=found;
-              }
-              try{return new JSONObject().put("description",merchant).put("amount",amount).put("paidBy","Family").put("category","Other").put("participants","Family").put("createdAt",date).put("credit",credit).put("sender",sender==null?"":sender).put("preview",body);}
-              catch(Exception e){return null;}
+            static void showSmsImport(Activity a,ExpenseDb db,Done done){
+              new AlertDialog.Builder(a).setTitle("Import a bank SMS")
+                .setMessage("Open your Messages app, select the bank transaction message, tap Share, and choose Family Expense. Only the message you share is processed. You can review the detected transaction before saving.")
+                .setPositiveButton("Got it",null).show();
             }
-            static void review(Activity a,ExpenseDb db,ArrayList<JSONObject> rows,Done done){if(rows.isEmpty()){new AlertDialog.Builder(a).setTitle("No transactions found").setMessage("No supported bank alerts found in the last 90 days.").setPositiveButton("OK",null).show();return;}String[] labels=new String[rows.size()];boolean[] checked=new boolean[rows.size()];for(int i=0;i<rows.size();i++){JSONObject o=rows.get(i);labels[i]=(o.optBoolean("credit")?"CREDIT ":"DEBIT ")+"₹"+o.optDouble("amount")+" · "+o.optString("description")+"\n"+new java.text.SimpleDateFormat("dd MMM yyyy",Locale.getDefault()).format(new Date(o.optLong("createdAt")))+" · "+o.optString("sender");}
-              new AlertDialog.Builder(a).setTitle("Review; select debits to import").setMultiChoiceItems(labels,checked,(d,w,on)->checked[w]=on).setPositiveButton("Import selected",(d,w)->{int n=0;for(int i=0;i<rows.size();i++)if(checked[i]&&!rows.get(i).optBoolean("credit"))if(db.mergeFromSync(new JSONArray().put(rows.get(i)))>0)n++;final int count=n;new AlertDialog.Builder(a).setTitle("Import complete").setMessage(count+" debit expenses added. Credits were not added as expenses.").setPositiveButton("OK",(x,y)->done.run()).show();}).setNegativeButton("Cancel",null).show();}
+            static void handleSharedText(Activity a, android.content.Intent intent, ExpenseDb db, Done done){
+              if(intent==null || !android.content.Intent.ACTION_SEND.equals(intent.getAction()))return;
+              String type=intent.getType();
+              if(type==null || !type.startsWith("text/"))return;
+              CharSequence shared=intent.getCharSequenceExtra(android.content.Intent.EXTRA_TEXT);
+              if(shared==null || shared.toString().trim().isEmpty())return;
+              JSONObject item=parse("Shared bank SMS",shared.toString(),System.currentTimeMillis());
+              if(item==null){
+                new AlertDialog.Builder(a).setTitle("No transaction detected").setMessage("This shared message did not match a supported transaction alert. You can still add the expense manually.").setPositiveButton("OK",null).show();
+                return;
+              }
+              ArrayList<JSONObject> rows=new ArrayList<>();rows.add(item);review(a,db,rows,done);
+            }
           }'''
           (j/"FeatureBridge.java").write_text(feature)
           main=j/"MainActivity.java"; out=[]
@@ -403,10 +395,25 @@ jobs:
           main.write_text("\n".join(out)+"\n")
           manifest=root/"AndroidManifest.xml"; android="{http://schemas.android.com/apk/res/android}"; ET.register_namespace("android","http://schemas.android.com/apk/res/android")
           tree=ET.parse(manifest); node=tree.getroot(); have={e.get(android+"name") for e in node.findall("uses-permission")}
-          for name in ["android.permission.READ_SMS","android.permission.INTERNET","android.permission.ACCESS_WIFI_STATE","android.permission.ACCESS_NETWORK_STATE"]:
+          for name in ["android.permission.INTERNET","android.permission.ACCESS_WIFI_STATE","android.permission.ACCESS_NETWORK_STATE"]:
             if name not in have: el=ET.Element("uses-permission");el.set(android+"name",name);node.insert(0,el)
-          node.find("application").set(android+"usesCleartextTraffic","false");tree.write(manifest,encoding="utf-8",xml_declaration=True)
-          print("Added user-initiated SMS review and AES-GCM encrypted two-way LAN sync.")
+          app=node.find("application")
+          app.set(android+"usesCleartextTraffic","false")
+          # Accept only user-initiated shared text, such as a selected bank SMS.
+          activity=next((x for x in app.findall("activity") if x.get(android+"name","").endswith("MainActivity")),None)
+          if activity is None: raise SystemExit("MainActivity not found for share-import intent filter")
+          found=False
+          for filt in activity.findall("intent-filter"):
+            actions=[x.get(android+"name") for x in filt.findall("action")]
+            types=[x.get(android+"mimeType") for x in filt.findall("data")]
+            if "android.intent.action.SEND" in actions and "text/plain" in types: found=True
+          if not found:
+            filt=ET.SubElement(activity,"intent-filter")
+            ET.SubElement(filt,"action").set(android+"name","android.intent.action.SEND")
+            ET.SubElement(filt,"category").set(android+"name","android.intent.category.DEFAULT")
+            ET.SubElement(filt,"data").set(android+"mimeType","text/plain")
+          tree.write(manifest,encoding="utf-8",xml_declaration=True)
+          print("Added user-selected shared SMS import without inbox-reading permission and AES-GCM encrypted two-way LAN sync.")
           PY
 
       - name: Set up Java
@@ -446,11 +453,12 @@ jobs:
           grep -q "importBtn.setOnClickListener(v->FeatureBridge.showSmsImport" project/app/src/main/java/com/familyexpense/app/MainActivity.java
           grep -q "onRequestPermissionsResult" project/app/src/main/java/com/familyexpense/app/MainActivity.java
           grep -q 'importBtn=button("Import SMS"' project/app/src/main/java/com/familyexpense/app/MainActivity.java
+          grep -q "handleSharedText" project/app/src/main/java/com/familyexpense/app/FeatureBridge.java
+          grep -q "android.intent.action.SEND" project/app/src/main/AndroidManifest.xml
           grep -q "onRequestPermissionsResult" project/app/src/main/java/com/familyexpense/app/MainActivity.java
-          grep -q 'Telephony.Sms.Inbox.CONTENT_URI' project/app/src/main/java/com/familyexpense/app/FeatureBridge.java
           grep -q 'verification code' project/app/src/main/java/com/familyexpense/app/FeatureBridge.java
           "$AAPT" dump permissions "$APK" | tee /tmp/apk-permissions.txt
-          grep -q "android.permission.READ_SMS" /tmp/apk-permissions.txt
+          if grep -q "android.permission.READ_SMS" /tmp/apk-permissions.txt; then echo "Unexpected READ_SMS permission"; exit 1; fi
           grep -q "android.permission.INTERNET" /tmp/apk-permissions.txt
           echo "Feature source and required permissions verified in compiled APK."
       - name: Upload APK
