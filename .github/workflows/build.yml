@@ -39,14 +39,14 @@ jobs:
                   }:
                       root.remove(node)
                   elif node.tag in {'receiver', 'service'}:
-                      if 'SMS_RECEIVED' in ET.tostring(node, encoding='unicode') or 'NotificationListenerService' in ET.tostring(node, encoding='unicode'):
-                          root.remove(node)
+                      # This project only uses these components for SMS/notification transaction capture.
+                      root.remove(node)
               app = root.find('application')
               if app is not None:
                   app.attrib.pop(android + 'usesCleartextTraffic', None)
               tree.write(path, encoding='utf-8', xml_declaration=True)
               result = path.read_text()
-              for forbidden in ('READ_SMS', 'RECEIVE_SMS', 'NotificationListenerService', 'SMS_RECEIVED'):
+              for forbidden in ('READ_SMS', 'RECEIVE_SMS', 'READ_PHONE_STATE', 'RECEIVE_MMS', 'READ_MMS'):
                   if forbidden in result:
                       raise SystemExit(f"Sensitive entry {forbidden} remains in {path}")
               print(f"Verified reduced-permission manifest: {path}")
