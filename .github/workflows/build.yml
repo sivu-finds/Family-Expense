@@ -29,6 +29,15 @@ jobs:
           echo "=== Resource files ==="
           find project/app/src/main/res -maxdepth 3 -type f -print
 
+      - name: Inspect database and Wi-Fi sync implementations
+        run: |
+          echo "=== ExpenseDb.java ==="
+          sed -n '1,280p' project/app/src/main/java/com/familyexpense/app/ExpenseDb.java
+          echo "=== WifiSyncServer.java ==="
+          sed -n '1,320p' project/app/src/main/java/com/familyexpense/app/WifiSyncServer.java
+          echo "=== TransactionSmsReceiver.java ==="
+          sed -n '1,240p' project/app/src/main/java/com/familyexpense/app/TransactionSmsReceiver.java
+
       - name: Inspect transaction capture source references
         run: |
           echo "=== Capture source files ==="
