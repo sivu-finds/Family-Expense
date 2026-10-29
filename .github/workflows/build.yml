@@ -120,7 +120,6 @@ jobs:
           db = new ExpenseDb(this);
           buildUi();
           // Process only SMS text explicitly shared by the user; no inbox permission is requested.
-          FeatureBridge.handleSharedText(this, getIntent(), db, () -> refresh());
           // Android 15+ edge-to-edge: explicitly keep content below the status bar
           // and above the navigation/gesture area using the actual system insets.
           View content = findViewById(android.R.id.content);
