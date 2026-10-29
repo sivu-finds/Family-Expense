@@ -141,6 +141,30 @@ jobs:
           getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
           db = new ExpenseDb(this);
           buildUi();
+          // Android 15+ edge-to-edge: explicitly keep content below the status bar
+          // and above the navigation/gesture area using the actual system insets.
+          View content = findViewById(android.R.id.content);
+          content.setOnApplyWindowInsetsListener((view, insets) -> {
+              int top = 0, bottom = 0;
+              if (android.os.Build.VERSION.SDK_INT >= 30) {
+                  android.graphics.Insets bars = insets.getInsets(WindowInsets.Type.systemBars());
+                  top = bars.top;
+                  bottom = bars.bottom;
+              } else {
+                  top = insets.getSystemWindowInsetTop();
+                  bottom = insets.getSystemWindowInsetBottom();
+              }
+              if (view instanceof android.view.ViewGroup) {
+                  View child = ((android.view.ViewGroup)view).getChildAt(0);
+                  if (child instanceof ScrollView) {
+                      ScrollView sv = (ScrollView) child;
+                      sv.setClipToPadding(false);
+                      sv.setPadding(sv.getPaddingLeft(), top + dp(16), sv.getPaddingRight(), bottom + dp(28));
+                  }
+              }
+              return insets;
+          });
+          content.requestApplyInsets();
           refresh();
           }
 
@@ -212,7 +236,7 @@ jobs:
 
           LinearLayout tools=row(); LinearLayout.LayoutParams tlp=lp(-1,52); tlp.topMargin=dp(14); page.addView(tools,tlp);
           TextView family=button("Family sync",false); tools.addView(family,new LinearLayout.LayoutParams(0,-1,1));
-          family.setOnClickListener(v->{new AlertDialog.Builder(this).setTitle("Family Wi-Fi sync").setMessage("Start the local test host on this device. Secure pairing and encrypted family sync are not implemented yet.").setNegativeButton("Cancel",null).setPositiveButton("Start host",(d,w)->{sync=new WifiSyncServer();sync.start(this);status.setText("Local Wi-Fi test host started. Secure pairing is still in development.");}).show();});
+          family.setOnClickListener(v->{new AlertDialog.Builder(this).setTitle("Family Wi-Fi sync").setMessage("Local Wi-Fi sync is the goal. This build only has a test-host scaffold; secure device pairing, authenticated encrypted transfer, and conflict handling are not implemented yet. Do not use it to share private expense data yet.").setNegativeButton("Cancel",null).setPositiveButton("Start host",(d,w)->{sync=new WifiSyncServer();sync.start(this);status.setText("Local Wi-Fi test host started. Secure pairing is still in development.");}).show();});
           TextView importBtn=button("Import options",false); LinearLayout.LayoutParams ilp=new LinearLayout.LayoutParams(0,-1,1); ilp.leftMargin=dp(10); tools.addView(importBtn,ilp);
           importBtn.setOnClickListener(v->new AlertDialog.Builder(this).setTitle("Transaction import").setMessage("Automatic SMS reading is not enabled in this safety-focused build. You can add expenses manually. Any future import feature will be optional and clearly explained.").setPositiveButton("Got it",null).show());
           search.addTextChangedListener(new TextWatcher(){public void beforeTextChanged(CharSequence s,int st,int c,int a){} public void onTextChanged(CharSequence s,int start,int before,int count){filterRecent(s.toString());} public void afterTextChanged(Editable e){}});
